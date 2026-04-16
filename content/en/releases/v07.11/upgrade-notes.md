@@ -375,8 +375,68 @@ This will be the node that reaches that point in the boot process first.
 All other nodes will wait until that is complete before proceeding with the boot process.
 
 It is recommended however to use a single node to execute the migration.
-To avoid Stroom starting up and beginning processing you can use the `migrage` command to just migrate the database and not fully boot Stroom.
-See [`migrage` command]({{< relref "/docs/user-guide/tools/command-line#migrate" >}}) for more details.
+To avoid Stroom starting up and beginning processing you can use the `migrate` command to just migrate the database and not fully boot Stroom.
+See [`migrate` command]({{< relref "/docs/user-guide/tools/command-line#migrate" >}}) for more details.
+
+
+### Pre-Migration Scripts
+
+{{% warning %}}
+It is important that you run this pre-migration check or the database migration may fail.
+{{% /warning %}}
+
+A previous database migration in v7.6 may have resulted in `annotation_entry` database records with no value in the `entry_user_uuid` column.
+This is likely caused by annotations being linked to users that were no longer in Stroom when the 7.6 migration ran.
+If that is the case then the v7.11 migration `V07_11_00_001__annotation3.sql` will fail.
+
+To establish if you need you have any records in this state, run the following script against the Stroom database.
+This script can also be downloaded from {{< external-link "v07_11_db_pre_migration_checks.sql" "https://raw.githubusercontent.com/gchq/stroom/refs/heads/7.11/scripts/v07_11_db_pre_migration_checks.sql" >}} on GitHub.
+
+```sql
+-- A set of SQL queries to run before migrating from v6 to v7
+-- See https://gchq.github.io/stroom-docs/releases/v07.11/upgrade-notes/
+-- 
+-- Run with the mysql --table arg to get formatted output
+-- e.g.
+-- mysql --force --table -h"localhost" -P"3306" -u"stroomuser" -p"stroompassword1" stroom < v07_11_db_pre_migration_checks.sql > v07_11_db_pre_migration_checks.out 2>&1
+-- docker exec -i stroom-all-dbs mysql --force --table -h"localhost" -P"3307" -u"stroomuser" -p"stroompassword1" stroom < v07_11_db_pre_migration_checks.sql > v07_11_db_pre_migration_checks.out 2>&1
+
+\! echo 'Find annotation entries with no assigned user. No action required if this returns nothing.';
+
+SELECT a.id, a.title, ae.id AS entry_id
+FROM annotation a
+INNER JOIN annotation_entry ae ON a.id = ae.fk_annotation_id
+WHERE ae.entry_user_uuid IS NULL
+OR ae.entry_user_uuid = '';
+
+\! echo 'Listing all enabled Stroom users for reference';
+
+SELECT uuid, name, display_name, full_name
+FROM stroom_user su
+WHERE is_group = false
+AND enabled = true
+ORDER by name;
+
+\! echo 'Finished';
+```
+
+**If** the first `SELECT` statement returns any rows you will need to take remedial action.
+
+In order to fix the missing data, you need the {{< glossary "uuid" >}} of a user that can be associated with the annotation entries.
+You will need to establish the {{< glossary "uuid" >}} of a suitable user, for example a user that is an administrator.
+The above script will also list all enabled users in your Stroom instance.
+
+Select the `uuid` of an appropriate user and run the following {{< glossary "sql" >}} statement, replacing `<insert user UUID here>` with the chosen UUID value.
+
+```sql
+UPDATE annotation_entry
+SET entry_user_uuid = '<insert user UUID here>'
+WHERE entry_user_uuid IS NULL
+OR entry_user_uuid = '';
+```
+
+Once complete, re-run the `v07_11_db_pre_migration_checks.sql` script to verify that the column is now fully populated.
+Then proceed with the 7.11 migration.
 
 
 <!-- 
